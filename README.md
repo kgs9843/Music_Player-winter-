@@ -138,11 +138,10 @@ sudo apt install yt-dlp
 ---
 
 ## 📸 데모
-
-<!-- 스크린샷을 여기에 추가하세요 -->
 <div align="center">
-  
-![Demo Screenshot](./assets/demo-screenshot.png)
+<img width="2409" height="1004" alt="image" src="https://github.com/user-attachments/assets/117d6249-2909-4347-95ad-37716f3108a7" />
+</div>
+
 
 *🎄 크리스마스 트리 비주얼라이저 실행 화면*
 
