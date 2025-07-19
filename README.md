@@ -19,14 +19,16 @@
 - ✨ 원작 Codepen 예제를 최신 ES6 `import` 문법을 활용하여 모듈화 및 구조화
 - 🎵 Node.js 서버를 추가하여 **YouTube URL을 입력하면 해당 음악을 재생**할 수 있도록 기능 확장
 - 📡 `yt-dlp` 라이브러리를 활용해 유튜브 오디오를 다운로드하고 스트리밍
+- 🐳 **Docker Compose로 원클릭 실행** - 복잡한 설정 없이 바로 시작!
 
 ---
 
 ## 🚀 주요 기능
 
-- 🔊 음악의 주파수에 따라 조명이 밝아지며 춤추는 시각 효과
-- 🌐 유튜브 URL 입력 시 해당 음악 자동 재생
-- 🖥️ 클라이언트-서버 구조로 분리된 프로젝트 구성 (프론트 + 백엔드)
+- 🔊 **실시간 오디오 시각화**: 음악의 주파수에 따라 조명이 밝아지며 춤추는 시각 효과
+- 🌐 **YouTube 통합**: 유튜브 URL 입력 시 해당 음악 자동 재생
+- 🖥️ **마이크로서비스 아키텍처**: 클라이언트-서버 구조로 분리된 프로젝트 구성 (프론트 + 백엔드)
+- 🐳 **Docker 지원**: Docker Compose를 통한 원클릭 배포 및 실행
 
 ---
 
@@ -34,21 +36,58 @@
 
 ```
 music_play/
-├── client/                 # 프론트엔드 (Vite 기반)
-│   ├── public/
-│   ├── src/
-│   └── ...
-├── server/                 # 백엔드 (Node.js + yt-dlp)
-│   ├── server.js
-│   └── ...
-└── README.md
+├── 🐳 docker-compose.yml     # Docker Compose 설정 파일
+├── 📁 client/               # 프론트엔드 (Vite 기반)
+│   ├── 🐳 Dockerfile
+│   ├── 📂 public/
+│   ├── 📂 src/
+│   ├── 📄 package.json
+│   └── 📄 vite.config.js
+├── 📁 server/               # 백엔드 (Node.js + yt-dlp)
+│   ├── 🐳 Dockerfile
+│   ├── 📄 server.js
+│   └── 📄 package.json
+└── 📄 README.md
 ```
+
+### 🐳 Docker 구성
+
+- **Frontend Container**: Vite 개발 서버 (포트 5173)
+- **Backend Container**: Express API 서버 (포트 3000)
+- **Volume Mount**: 소스 코드 실시간 반영
+- **Network**: 컨테이너 간 통신을 위한 브리지 네트워크
 
 ---
 
 ## ⚙️ 시작하기
 
-### 📋 사전 요구사항
+### 🐳 Docker Compose로 간편 실행 (권장)
+
+Docker가 설치되어 있다면 **한 번의 명령**으로 전체 애플리케이션을 실행할 수 있습니다!
+
+```bash
+# 레포지토리 클론
+git clone https://github.com/kgs9843/Music_Player-winter-.git
+cd Music_Player-winter-
+
+# Docker Compose로 실행
+docker-compose up -d
+```
+
+**접속 주소:**
+- 🌐 애플리케이션: http://localhost:5173
+- 📡 API 서버: http://localhost:3000
+
+```bash
+# 종료
+docker-compose down
+```
+
+---
+
+### 💻 로컬 개발 환경 실행
+
+#### 📋 사전 요구사항
 
 - Node.js (v14 이상)
 - npm 또는 yarn
@@ -66,7 +105,7 @@ pip install yt-dlp
 sudo apt install yt-dlp
 ```
 
-### 🚀 설치 및 실행
+#### 🚀 수동 설치 및 실행
 
 1. **레포지토리 클론**
    ```bash
@@ -113,6 +152,13 @@ sudo apt install yt-dlp
     </td>
   </tr>
   <tr>
+    <td><strong>DevOps</strong></td>
+    <td>
+      <img src="https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white"/>
+      <img src="https://img.shields.io/badge/Docker%20Compose-2496ED?style=flat-square&logo=docker&logoColor=white"/>
+    </td>
+  </tr>
+  <tr>
     <td><strong>Tools</strong></td>
     <td>
       <img src="https://img.shields.io/badge/yt--dlp-FF0000?style=flat-square&logo=youtube&logoColor=white"/>
@@ -133,15 +179,21 @@ sudo apt install yt-dlp
 - **Express** - 웹 애플리케이션 프레임워크
 - **yt-dlp** - 유튜브 오디오 추출 도구
 
-> ⚠️ **중요**: yt-dlp는 Python 기반 툴입니다. 서버 환경에 yt-dlp 설치가 필요합니다.
+#### DevOps
+- **Docker** - 컨테이너화 및 배포
+- **Docker Compose** - 멀티 컨테이너 오케스트레이션
+
+> ⚠️ **Docker 사용 시**: 모든 종속성이 자동으로 설치되므로 별도의 yt-dlp 설치가 불필요합니다!  
+> 💻 **로컬 개발 시**: yt-dlp는 Python 기반 툴이므로 수동 설치가 필요합니다.
 
 ---
 
 ## 📸 데모
-<div align="center">
-<img width="2409" height="1004" alt="image" src="https://github.com/user-attachments/assets/117d6249-2909-4347-95ad-37716f3108a7" />
-</div>
 
+
+<div align="center">
+<img width="2470" height="1141" alt="image" src="https://github.com/user-attachments/assets/e0ed979f-b93b-482c-a185-64902a55db01" />
+</div>  
 
 *🎄 크리스마스 트리 비주얼라이저 실행 화면*
 
