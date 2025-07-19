@@ -39,7 +39,7 @@ music_play/
 │   ├── src/
 │   └── ...
 ├── server/                 # 백엔드 (Node.js + yt-dlp)
-│   ├── index.js
+│   ├── server.js
 │   └── ...
 └── README.md
 ```
