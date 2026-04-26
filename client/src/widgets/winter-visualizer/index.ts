@@ -1,3 +1,8 @@
 export { createWinterVisualizer } from './ui/createWinterVisualizer'
 export type { WinterVisualizerHandle } from './ui/createWinterVisualizer'
-export { snowGlowEffectConfig } from './model/config'
+export type { WinterAppearanceSettings } from './model/appearance'
+export {
+  getDefaultWinterAppearance,
+  snowGlowEffectConfig,
+  winterAppearanceUiDefaults,
+} from './model/config'

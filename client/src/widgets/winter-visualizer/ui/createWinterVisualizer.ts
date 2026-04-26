@@ -3,7 +3,12 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { getApiBaseUrl } from '@/shared/config/env'
-import { snowGlowEffectConfig, winterTextureUrls } from '../model/config'
+import type { WinterAppearanceSettings } from '../model/appearance'
+import {
+  getDefaultWinterAppearance,
+  snowGlowEffectConfig,
+  winterTextureUrls,
+} from '../model/config'
 
 const { PI, sin, cos } = Math
 const TAU = 2 * PI
@@ -45,6 +50,8 @@ export type WinterVisualizerHandle = {
   seekSec: (t: number) => void
   togglePlay: () => void
   isPaused: () => boolean
+  applyAppearance: (patch: Partial<WinterAppearanceSettings>) => void
+  getAppearance: () => WinterAppearanceSettings
   dispose: () => void
 }
 
@@ -108,6 +115,33 @@ export function createWinterVisualizer(
   let rafId: number | null = null
   let disposed = false
   let youtubeAbort: AbortController | null = null
+  let bloomPass: UnrealBloomPass | undefined
+
+  const appearance: WinterAppearanceSettings = getDefaultWinterAppearance()
+  const snowAppearanceUniforms = {
+    uSnowSizeScale: { value: appearance.snow.sizeScale },
+    uSnowColor: { value: new THREE.Color(appearance.snow.colorHex) },
+  }
+  const sparkleTintUniforms = {
+    uSparkleTint: {
+      value: new THREE.Color(appearance.shader.tintHex),
+    },
+  }
+  const treeColorUniforms = {
+    uTreeHueStart: { value: appearance.shader.tree.hueStart },
+    uTreeHueEnd: { value: appearance.shader.tree.hueEnd },
+    uTreeSaturation: { value: appearance.shader.tree.saturation },
+    uTreeLightness: { value: appearance.shader.tree.lightness },
+  }
+  const planePaletteUniforms = {
+    uPlaneColor0: { value: new THREE.Color(appearance.shader.planeColors[0]) },
+    uPlaneColor1: { value: new THREE.Color(appearance.shader.planeColors[1]) },
+    uPlaneColor2: { value: new THREE.Color(appearance.shader.planeColors[2]) },
+  }
+
+  /** `ShaderMaterial`이 유니폼 객체를 복제하는 경우 대비 — 라이브 머티리얼에 직접 반영 */
+  let planeSparkleMaterial: THREE.ShaderMaterial | undefined
+  const snowMaterialRefs: THREE.ShaderMaterial[] = []
 
   const POLL_MS = 550
 
@@ -229,13 +263,24 @@ export function createWinterVisualizer(
       value: new THREE.DataTexture(analyser.data, fftSize / 2, 1, format),
     }
 
-    addPlane(
+    snowMaterialRefs.length = 0
+    planeSparkleMaterial = undefined
+
+    planeSparkleMaterial = addPlane(
       scene,
       uniforms,
       snowGlowEffectConfig.scene.planePoints,
       sparkleTexture,
+      sparkleTintUniforms,
+      planePaletteUniforms,
     )
-    addSnow(scene, uniforms, snowTextures)
+    addSnow(
+      scene,
+      uniforms,
+      snowTextures,
+      snowAppearanceUniforms,
+      snowMaterialRefs,
+    )
 
     range(snowGlowEffectConfig.scene.trees.rows).forEach((i) => {
       addTree(
@@ -244,6 +289,8 @@ export function createWinterVisualizer(
         snowGlowEffectConfig.scene.trees.pointsPerTree,
         [20, 0, -20 * i],
         sparkleTexture,
+        sparkleTintUniforms,
+        treeColorUniforms,
       )
       addTree(
         scene!,
@@ -251,19 +298,21 @@ export function createWinterVisualizer(
         snowGlowEffectConfig.scene.trees.pointsPerTree,
         [-20, 0, -20 * i],
         sparkleTexture,
+        sparkleTintUniforms,
+        treeColorUniforms,
       )
     })
 
     const renderScene = new RenderPass(scene, camera)
-    const bloomPass = new UnrealBloomPass(
+    bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
       1.5,
       0.4,
       0.85,
     )
-    bloomPass.threshold = snowGlowEffectConfig.bloom.threshold
-    bloomPass.strength = snowGlowEffectConfig.bloom.strength
-    bloomPass.radius = snowGlowEffectConfig.bloom.radius
+    bloomPass.threshold = appearance.bloom.threshold
+    bloomPass.strength = appearance.bloom.strength
+    bloomPass.radius = appearance.bloom.radius
 
     composer = new EffectComposer(renderer)
     composer.addPass(renderScene)
@@ -601,11 +650,109 @@ export function createWinterVisualizer(
     })
   }
 
+  function applyAppearance(patch: Partial<WinterAppearanceSettings>) {
+    if (disposed) return
+    if (patch.bloom) {
+      const b = patch.bloom
+      if (b.threshold !== undefined) appearance.bloom.threshold = b.threshold
+      if (b.strength !== undefined) appearance.bloom.strength = b.strength
+      if (b.radius !== undefined) appearance.bloom.radius = b.radius
+      if (bloomPass) {
+        bloomPass.threshold = appearance.bloom.threshold
+        bloomPass.strength = appearance.bloom.strength
+        bloomPass.radius = appearance.bloom.radius
+      }
+    }
+    if (patch.shader) {
+      const sh = patch.shader
+      if (sh.tintHex !== undefined) {
+        appearance.shader.tintHex = sh.tintHex
+        sparkleTintUniforms.uSparkleTint.value.set(sh.tintHex)
+      }
+      if (sh.tree) {
+        const t = sh.tree
+        if (t.hueStart !== undefined) {
+          appearance.shader.tree.hueStart = t.hueStart
+          treeColorUniforms.uTreeHueStart.value = t.hueStart
+        }
+        if (t.hueEnd !== undefined) {
+          appearance.shader.tree.hueEnd = t.hueEnd
+          treeColorUniforms.uTreeHueEnd.value = t.hueEnd
+        }
+        if (t.saturation !== undefined) {
+          appearance.shader.tree.saturation = t.saturation
+          treeColorUniforms.uTreeSaturation.value = t.saturation
+        }
+        if (t.lightness !== undefined) {
+          appearance.shader.tree.lightness = t.lightness
+          treeColorUniforms.uTreeLightness.value = t.lightness
+        }
+      }
+      if (sh.planeColors !== undefined) {
+        appearance.shader.planeColors = [...sh.planeColors] as [
+          string,
+          string,
+          string,
+        ]
+        const [c0, c1, c2] = sh.planeColors
+        planePaletteUniforms.uPlaneColor0.value.set(c0)
+        planePaletteUniforms.uPlaneColor1.value.set(c1)
+        planePaletteUniforms.uPlaneColor2.value.set(c2)
+        const pm = planeSparkleMaterial
+        if (pm) {
+          pm.uniforms.uPlaneColor0.value.set(c0)
+          pm.uniforms.uPlaneColor1.value.set(c1)
+          pm.uniforms.uPlaneColor2.value.set(c2)
+        }
+      }
+    }
+    if (patch.snow) {
+      const s = patch.snow
+      if (s.sizeScale !== undefined) {
+        appearance.snow.sizeScale = s.sizeScale
+        snowAppearanceUniforms.uSnowSizeScale.value = s.sizeScale
+      }
+      if (s.colorHex !== undefined) {
+        appearance.snow.colorHex = s.colorHex
+        snowAppearanceUniforms.uSnowColor.value.set(s.colorHex)
+      }
+      const sz = appearance.snow.sizeScale
+      const hex = appearance.snow.colorHex
+      for (const m of snowMaterialRefs) {
+        m.uniforms.uSnowSizeScale.value = sz
+        m.uniforms.uSnowColor.value.set(hex)
+      }
+    }
+  }
+
+  function getAppearance(): WinterAppearanceSettings {
+    return {
+      bloom: { ...appearance.bloom },
+      shader: {
+        tintHex: appearance.shader.tintHex,
+        tree: { ...appearance.shader.tree },
+        planeColors: [...appearance.shader.planeColors] as [
+          string,
+          string,
+          string,
+        ],
+      },
+      snow: {
+        sizeScale: appearance.snow.sizeScale,
+        colorHex: appearance.snow.colorHex,
+      },
+    }
+  }
+
   function dispose() {
     disposed = true
 
+    planeSparkleMaterial = undefined
+    snowMaterialRefs.length = 0
+
     youtubeAbort?.abort()
     youtubeAbort = null
+    bloomPass = undefined
 
     document.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('resize', onResize, false)
@@ -704,6 +851,8 @@ export function createWinterVisualizer(
     seekSec,
     togglePlay,
     isPaused,
+    applyAppearance,
+    getAppearance,
     dispose,
   }
 }
@@ -714,26 +863,53 @@ function addTree(
   totalPoints: number,
   treePosition: [number, number, number],
   sparkleTexture: THREE.Texture,
+  sparkleTintUniforms: { uSparkleTint: { value: THREE.Color } },
+  treeColorUniforms: {
+    uTreeHueStart: { value: number }
+    uTreeHueEnd: { value: number }
+    uTreeSaturation: { value: number }
+    uTreeLightness: { value: number }
+  },
 ) {
   const vertexShader = `
   attribute float mIndex;
   varying vec3 vColor;
   varying float opacity;
   uniform sampler2D tAudioData;
+  uniform float uTreeHueStart;
+  uniform float uTreeHueEnd;
+  uniform float uTreeSaturation;
+  uniform float uTreeLightness;
 
   float norm(float value, float min, float max ){
       return (value - min) / (max - min);
   }
-  float lerp(float norm, float min, float max){
-  return (max - min) * norm + min;
+  float lerp(float n, float min, float max){
+  return (max - min) * n + min;
   }
 
   float map(float value, float sourceMin, float sourceMax, float destMin, float destMax){
   return lerp(norm(value, sourceMin, sourceMax), destMin, destMax);
   }
 
+  vec3 hsl2rgb(float h, float s, float l) {
+    h = fract(h);
+    float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
+    float m = l - c * 0.5;
+    vec3 rgb;
+    if (h < 1.0/6.0) rgb = vec3(c, x, 0.0);
+    else if (h < 2.0/6.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0/6.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0/6.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
+    else rgb = vec3(c, 0.0, x);
+    return rgb + m;
+  }
+
   void main() {
-      vColor = color;
+      float hue = mix(uTreeHueEnd, uTreeHueStart, mIndex);
+      vColor = hsl2rgb(hue, uTreeSaturation, uTreeLightness);
       vec3 p = position;
       vec4 mvPosition = modelViewMatrix * vec4( p, 1.0 );
       float amplitude = texture2D( tAudioData, vec2( mIndex, 0.1 ) ).r;
@@ -745,17 +921,21 @@ function addTree(
   }`
 
   const fragmentShader = `
+  uniform vec3 uSparkleTint;
   varying vec3 vColor;
   varying float opacity;
   uniform sampler2D pointTexture;
   void main() {
-      gl_FragColor = vec4( vColor, opacity );
+      vec3 tinted = vColor * uSparkleTint;
+      gl_FragColor = vec4( tinted, opacity );
       gl_FragColor = gl_FragColor * texture2D( pointTexture, gl_PointCoord ); 
   }`
 
   const shaderMaterial = new THREE.ShaderMaterial({
     uniforms: {
       ...uniforms,
+      ...sparkleTintUniforms,
+      ...treeColorUniforms,
       pointTexture: {
         value: sparkleTexture,
       },
@@ -765,17 +945,14 @@ function addTree(
     blending: THREE.AdditiveBlending,
     depthTest: false,
     transparent: true,
-    vertexColors: true,
+    vertexColors: false,
   })
 
   const geometry = new THREE.BufferGeometry()
   const positions: number[] = []
-  const colors: number[] = []
   const sizes: number[] = []
   const phases: number[] = []
   const mIndexs: number[] = []
-
-  const color = new THREE.Color()
 
   for (let i = 0; i < totalPoints; i++) {
     const t = Math.random()
@@ -788,8 +965,6 @@ function addTree(
     positions.push(y + rand(-0.3 * modifier, 0.3 * modifier))
     positions.push(z + rand(-0.3 * modifier, 0.3 * modifier))
 
-    color.setHSL(map(i, 0, totalPoints, 1.0, 0.0), 1.0, 0.5)
-    colors.push(color.r, color.g, color.b)
     phases.push(rand(1000))
     sizes.push(1)
 
@@ -803,7 +978,6 @@ function addTree(
       THREE.DynamicDrawUsage,
     ),
   )
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
   geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
   geometry.setAttribute('phase', new THREE.Float32BufferAttribute(phases, 1))
   geometry.setAttribute('mIndex', new THREE.Float32BufferAttribute(mIndexs, 1))
@@ -819,17 +993,22 @@ function addSnow(
   scene: THREE.Scene,
   uniforms: Record<string, any>,
   textures: THREE.Texture[],
+  snowAppearanceUniforms: {
+    uSnowSizeScale: { value: number }
+    uSnowColor: { value: THREE.Color }
+  },
+  snowMaterialRefs: THREE.ShaderMaterial[],
 ) {
   const vertexShader = `
   attribute float size;
   attribute float phase;
   attribute float phaseSecondary;
 
-  varying vec3 vColor;
   varying float opacity;
 
   uniform float time;
   uniform float step;
+  uniform float uSnowSizeScale;
 
   float norm(float value, float min, float max ){
       return (value - min) / (max - min);
@@ -843,7 +1022,6 @@ function addSnow(
   void main() {
       float t = time* 0.0006;
 
-      vColor = color;
       vec3 p = position;
 
       p.y = map(mod(phase+step, 1000.0), 0.0, 1000.0, 25.0, -8.0);
@@ -852,16 +1030,16 @@ function addSnow(
 
       opacity = map(p.z, -150.0, 15.0, 0.0, 1.0);
       vec4 mvPosition = modelViewMatrix * vec4( p, 1.0 );
-      gl_PointSize = size * ( 100.0 / -mvPosition.z );
+      gl_PointSize = size * uSnowSizeScale * ( 100.0 / -mvPosition.z );
       gl_Position = projectionMatrix * mvPosition;
   }`
 
   const fragmentShader = `
   uniform sampler2D pointTexture;
-  varying vec3 vColor;
+  uniform vec3 uSnowColor;
   varying float opacity;
   void main() {
-      gl_FragColor = vec4( vColor, opacity );
+      gl_FragColor = vec4( uSnowColor, opacity );
       gl_FragColor = gl_FragColor * texture2D( pointTexture, gl_PointCoord ); 
   }`
 
@@ -871,6 +1049,7 @@ function addSnow(
     const shaderMaterial = new THREE.ShaderMaterial({
       uniforms: {
         ...uniforms,
+        ...snowAppearanceUniforms,
         pointTexture: {
           value: texture,
         },
@@ -880,24 +1059,20 @@ function addSnow(
       blending: THREE.AdditiveBlending,
       depthTest: false,
       transparent: true,
-      vertexColors: true,
+      vertexColors: false,
     })
+    snowMaterialRefs.push(shaderMaterial)
 
     const geometry = new THREE.BufferGeometry()
     const positions: number[] = []
-    const colors: number[] = []
     const sizes: number[] = []
     const phases: number[] = []
     const phaseSecondaries: number[] = []
-
-    const color = new THREE.Color()
 
     for (let i = 0; i < totalPoints; i++) {
       const [x, y, z] = [rand(25, -25), 0, rand(15, -150)]
       positions.push(x, y, z)
 
-      color.set(randChoice(set?.colors ?? ['#ffffff']))
-      colors.push(color.r, color.g, color.b)
       phases.push(rand(1000))
       phaseSecondaries.push(rand(1000))
       const min = set?.size.min ?? 2
@@ -909,7 +1084,6 @@ function addSnow(
       'position',
       new THREE.Float32BufferAttribute(positions, 3),
     )
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
     geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
     geometry.setAttribute('phase', new THREE.Float32BufferAttribute(phases, 1))
     geometry.setAttribute(
@@ -933,14 +1107,20 @@ function addPlane(
   uniforms: Record<string, any>,
   totalPoints: number,
   sparkleTexture: THREE.Texture,
-) {
+  sparkleTintUniforms: { uSparkleTint: { value: THREE.Color } },
+  planePaletteUniforms: {
+    uPlaneColor0: { value: THREE.Color }
+    uPlaneColor1: { value: THREE.Color }
+    uPlaneColor2: { value: THREE.Color }
+  },
+): THREE.ShaderMaterial {
   const vertexShader = `
   attribute float size;
-  attribute vec3 customColor;
-  varying vec3 vColor;
+  attribute float paletteIx;
+  varying float vPaletteIx;
 
   void main() {
-      vColor = customColor;
+      vPaletteIx = paletteIx;
       vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
       gl_PointSize = size * ( 300.0 / -mvPosition.z );
       gl_Position = projectionMatrix * mvPosition;
@@ -948,16 +1128,28 @@ function addPlane(
 
   const fragmentShader = `
   uniform sampler2D pointTexture;
-  varying vec3 vColor;
+  uniform vec3 uSparkleTint;
+  uniform vec3 uPlaneColor0;
+  uniform vec3 uPlaneColor1;
+  uniform vec3 uPlaneColor2;
+  varying float vPaletteIx;
 
   void main() {
-      gl_FragColor = vec4( vColor, 1.0 );
+      float pix = vPaletteIx;
+      vec3 base;
+      if (pix < 0.5) base = uPlaneColor0;
+      else if (pix < 1.5) base = uPlaneColor1;
+      else base = uPlaneColor2;
+      vec3 tinted = base * uSparkleTint;
+      gl_FragColor = vec4( tinted, 1.0 );
       gl_FragColor = gl_FragColor * texture2D( pointTexture, gl_PointCoord );
   }`
 
   const shaderMaterial = new THREE.ShaderMaterial({
     uniforms: {
       ...uniforms,
+      ...sparkleTintUniforms,
+      ...planePaletteUniforms,
       pointTexture: {
         value: sparkleTexture,
       },
@@ -967,21 +1159,18 @@ function addPlane(
     blending: THREE.AdditiveBlending,
     depthTest: false,
     transparent: true,
-    vertexColors: true,
+    vertexColors: false,
   })
 
   const geometry = new THREE.BufferGeometry()
   const positions: number[] = []
-  const colors: number[] = []
+  const paletteIxs: number[] = []
   const sizes: number[] = []
-
-  const color = new THREE.Color()
 
   for (let i = 0; i < totalPoints; i++) {
     const [x, y, z] = [rand(-25, 25), 0, rand(-150, 15)]
     positions.push(x, y, z)
-    color.set(randChoice(['#93abd3', '#f2f4c0', '#9ddfd3']))
-    colors.push(color.r, color.g, color.b)
+    paletteIxs.push(randInt(3))
     sizes.push(1)
   }
 
@@ -992,12 +1181,13 @@ function addPlane(
     ),
   )
   geometry.setAttribute(
-    'customColor',
-    new THREE.Float32BufferAttribute(colors, 3),
+    'paletteIx',
+    new THREE.Float32BufferAttribute(paletteIxs, 1),
   )
   geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
 
   const plane = new THREE.Points(geometry, shaderMaterial)
   plane.position.y = -8
   scene.add(plane)
+  return shaderMaterial
 }
