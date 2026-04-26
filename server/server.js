@@ -12,7 +12,29 @@ import { spawn } from "child_process";
 dotenv.config();
 
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" })); // Vite 기본 포트 허용
+const defaultAllowedOrigins = ["http://localhost:5173"];
+const allowedOrigins = (() => {
+  const raw =
+    typeof process.env.ALLOWED_ORIGINS === "string"
+      ? process.env.ALLOWED_ORIGINS.trim()
+      : "";
+  if (!raw) return defaultAllowedOrigins;
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+})();
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Non-browser clients (curl, server-to-server) may omit Origin.
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS: origin not allowed"));
+    },
+  }),
+);
 app.use(express.json({ limit: "32kb" }));
 
 /** @typedef {{ status: string, percent: number, stage: string, error: string | null, outputPath: string | null, cleanupAt: number | null }} Job */
@@ -20,8 +42,9 @@ app.use(express.json({ limit: "32kb" }));
 /** @type {Map<string, Job>} */
 const jobs = new Map();
 
-// 오디오 임시 파일 보관 시간(기본 1시간). Range/seek를 위해 즉시 삭제하지 않는다.
-const AUDIO_TTL_MS = 60 * 60 * 1000;
+// 오디오 임시 파일 보관 시간(기본 24시간).
+// NOTE: `/youtube/jobs/:jobId/audio` 요청으로 TTL을 갱신(연장)하지 않는다.
+const AUDIO_TTL_MS = 24 * 60 * 60 * 1000;
 
 const require = createRequire(import.meta.url);
 /** @type {{ YOUTUBE_DL_PATH?: string }} */
@@ -252,7 +275,8 @@ async function runYoutubeJob(jobId, videoUrl) {
   }
 }
 
-app.get("/extract-audio", async (req, res) => {
+function registerRoutes(router) {
+  router.get("/extract-audio", async (req, res) => {
   const videoUrl = req.query.url;
   if (!videoUrl) return res.status(400).send("Missing url parameter");
 
@@ -278,9 +302,9 @@ app.get("/extract-audio", async (req, res) => {
     console.error(error);
     res.status(500).send("Failed to extract audio");
   }
-});
+  });
 
-app.post("/youtube/jobs", (req, res) => {
+  router.post("/youtube/jobs", (req, res) => {
   try {
     const url = req.body?.url;
     if (!url || typeof url !== "string" || !url.trim()) {
@@ -304,9 +328,9 @@ app.post("/youtube/jobs", (req, res) => {
     console.error(error);
     return res.status(500).json({ error: "Failed to create job" });
   }
-});
+  });
 
-app.get("/youtube/jobs/:jobId", (req, res) => {
+  router.get("/youtube/jobs/:jobId", (req, res) => {
   try {
     const job = jobs.get(req.params.jobId);
     if (!job) {
@@ -323,9 +347,9 @@ app.get("/youtube/jobs/:jobId", (req, res) => {
     console.error(error);
     return res.status(500).json({ error: "Failed to read job" });
   }
-});
+  });
 
-app.get("/youtube/jobs/:jobId/audio", (req, res) => {
+  router.get("/youtube/jobs/:jobId/audio", (req, res) => {
   try {
     const job = jobs.get(req.params.jobId);
     if (!job) {
@@ -336,7 +360,7 @@ app.get("/youtube/jobs/:jobId/audio", (req, res) => {
     }
 
     const filePath = job.outputPath;
-    scheduleJobCleanup(req.params.jobId);
+    // NOTE: Do not refresh TTL on audio access (e.g. seek / range).
 
     const range = req.headers.range;
     res.setHeader("Accept-Ranges", "bytes");
@@ -409,7 +433,13 @@ app.get("/youtube/jobs/:jobId/audio", (req, res) => {
     console.error(error);
     return res.status(500).send("Failed to send audio");
   }
-});
+  });
+}
+
+const api = express.Router();
+registerRoutes(api);
+app.use("/api", api);
+registerRoutes(app);
 
 app.listen(3000, () => {
   console.log("Server running on http://localhost:3000");

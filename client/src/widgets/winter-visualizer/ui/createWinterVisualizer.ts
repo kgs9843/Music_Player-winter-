@@ -2,9 +2,8 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
-import { createRadialSpriteTexture } from '@/shared/lib/threeSpriteTexture'
 import { getApiBaseUrl } from '@/shared/config/env'
-import { snowGlowEffectConfig } from '../model/config'
+import { snowGlowEffectConfig, winterTextureUrls } from '../model/config'
 
 const { PI, sin, cos } = Math
 const TAU = 2 * PI
@@ -112,6 +111,9 @@ export function createWinterVisualizer(
 
   const POLL_MS = 550
 
+  /** 스프라이트 PNG(로컬 assets) — init마다 로드, dispose 시 해제 */
+  let loadedTextures: THREE.Texture[] = []
+
   let mediaEl: HTMLAudioElement | null = null
   let mediaElObjectUrl: string | null = null
 
@@ -144,16 +146,55 @@ export function createWinterVisualizer(
     step: { type: 'f', value: 0.0 },
   }
 
-  const sparkleTexture = createRadialSpriteTexture({
-    colorStops: snowGlowEffectConfig.sparkle.colorStops,
-  })
+  function disposeLoadedTextures() {
+    for (const t of loadedTextures) {
+      t.dispose()
+    }
+    loadedTextures = []
+  }
 
-  const snowTextures = snowGlowEffectConfig.snow.sets.map((set) =>
-    createRadialSpriteTexture({ colorStops: set.textureStops }),
-  )
+  function loadWinterSpriteTextures() {
+    const loader = new THREE.TextureLoader()
+    loader.setCrossOrigin('anonymous')
 
-  function init() {
+    const pending: THREE.Texture[] = []
+    const loadOne = (url: string) =>
+      new Promise<THREE.Texture>((resolve, reject) => {
+        loader.load(
+          url,
+          (tex) => {
+            tex.colorSpace = THREE.SRGBColorSpace
+            pending.push(tex)
+            resolve(tex)
+          },
+          undefined,
+          reject,
+        )
+      })
+
+    return (async () => {
+      try {
+        const sparkle = await loadOne(winterTextureUrls.sparkle)
+        const flakes = await Promise.all(
+          [...winterTextureUrls.snowflakes].map((u) => loadOne(u)),
+        )
+        return { sparkleTexture: sparkle, snowTextures: flakes }
+      } catch (e) {
+        for (const t of pending) {
+          t.dispose()
+        }
+        throw e
+      }
+    })()
+  }
+
+  async function init() {
     if (disposed) return
+
+    disposeLoadedTextures()
+
+    const { sparkleTexture, snowTextures } = await loadWinterSpriteTextures()
+    loadedTextures = [sparkleTexture, ...snowTextures]
 
     scene = new THREE.Scene()
     renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -363,7 +404,19 @@ export function createWinterVisualizer(
           : typeof err === 'string'
             ? err
             : 'Unknown error'
-      options.onError?.(`Failed to convert or play audio. ${msg}`)
+
+      const pretty =
+        /not a valid url/i.test(msg) || /is not a valid url/i.test(msg)
+          ? '유효한 URL이 아니에요. YouTube 링크를 확인해 주세요.'
+          : /CORS/i.test(msg)
+            ? '서버 접근이 차단됐어요(CORS). 배포 도메인/서버 설정을 확인해 주세요.'
+            : /Failed to start YouTube conversion job/i.test(msg)
+              ? 'YouTube 변환 작업을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.'
+              : /YouTube conversion failed/i.test(msg)
+                ? 'YouTube 변환에 실패했어요. 다른 링크로 시도해 주세요.'
+                : msg
+
+      options.onError?.(pretty)
     }
   }
 
@@ -411,7 +464,15 @@ export function createWinterVisualizer(
     options.onLoading?.('오디오 스트리밍 중…')
     await el.play()
 
-    init()
+    try {
+      await init()
+    } catch (e) {
+      console.error(e)
+      options.onError?.(
+        '비주얼 텍스처를 불러오지 못했어요. 네트워크를 확인해 주세요.',
+      )
+      throw e
+    }
   }
 
   function getDurationSec(): number {
@@ -502,8 +563,9 @@ export function createWinterVisualizer(
           audio.setBuffer(audioBuffer)
           audio.play()
           analyser = new THREE.AudioAnalyser(audio, fftSize)
-          init()
-          resolve()
+          void init()
+            .then(() => resolve())
+            .catch(reject)
         },
         () => reject(new Error('decodeAudioData failed')),
       )
@@ -529,8 +591,9 @@ export function createWinterVisualizer(
           audio.setBuffer(buffer)
           audio.play()
           analyser = new THREE.AudioAnalyser(audio, fftSize)
-          init()
-          resolve()
+          void init()
+            .then(() => resolve())
+            .catch(reject)
         },
         undefined,
         () => reject(new Error('AudioLoader failed')),
@@ -602,6 +665,8 @@ export function createWinterVisualizer(
       composer.dispose()
       composer = undefined
     }
+
+    disposeLoadedTextures()
 
     if (scene) {
       scene.traverse((obj) => {
@@ -856,7 +921,11 @@ function addSnow(
     scene.add(mesh)
   }
 
-  textures.forEach((t, idx) => createSnowSet(t, idx))
+  const setCount = snowGlowEffectConfig.snow.sets.length
+  const n = Math.min(textures.length, setCount)
+  for (let idx = 0; idx < n; idx++) {
+    createSnowSet(textures[idx]!, idx)
+  }
 }
 
 function addPlane(

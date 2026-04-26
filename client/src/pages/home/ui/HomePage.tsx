@@ -22,6 +22,22 @@ export function HomePage() {
     navigate('/visualizer', { state })
   }
 
+  const parseYoutubeUrl = (raw: string) => {
+    try {
+      const u = new URL(raw)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+      const host = u.hostname.toLowerCase()
+      const isYoutube =
+        host === 'youtube.com' ||
+        host.endsWith('.youtube.com') ||
+        host === 'youtu.be'
+      if (!isYoutube) return null
+      return u.toString()
+    } catch {
+      return null
+    }
+  }
+
   return (
     <div id="overlay">
       <div className="panel">
@@ -86,7 +102,12 @@ export function HomePage() {
                 alert('YouTube URL을 입력해줘.')
                 return
               }
-              go({ kind: 'youtube', url })
+              const parsed = parseYoutubeUrl(url)
+              if (!parsed) {
+                alert('유효한 YouTube URL이 아니에요. 링크를 확인해 주세요.')
+                return
+              }
+              go({ kind: 'youtube', url: parsed })
             }}
           >
             Convert &amp; Play

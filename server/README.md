@@ -31,7 +31,8 @@ npm start
 - `GET /youtube/jobs/:jobId/audio`
   - 변환 완료 후 mp3를 스트리밍합니다.
   - **HTTP Range(206)** 를 지원해 브라우저 `<audio>` 시크/버퍼링이 안정적입니다.
-  - 임시 mp3는 서버에서 일정 시간 보관 후 삭제됩니다(TTL). `/audio` 호출 시 TTL이 갱신됩니다.
+  - 임시 mp3는 서버에서 일정 시간(기본 **24시간**) 보관 후 삭제됩니다(TTL).
+  - **seek/Range 요청으로 TTL은 갱신(연장)되지 않습니다.**
 
 ### 레거시
 

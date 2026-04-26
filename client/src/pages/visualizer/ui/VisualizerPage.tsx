@@ -251,27 +251,29 @@ export function VisualizerPage() {
             </div>
           </div>
         ) : null}
-        <div className="topbar-right">
-          <button
-            className="ghost icon-btn"
-            type="button"
-            aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
-            onClick={() => {
-              try {
-                void toggleFullscreen()
-              } catch (e) {
-                console.error(e)
-              }
-            }}
-          >
-            <img
-              className="icon-img"
-              src={isFullscreen ? exitFullScreenIcon : fullScreenIcon}
-              alt=""
-              aria-hidden="true"
-            />
-          </button>
-        </div>
+        {!loading ? (
+          <div className="topbar-right">
+            <button
+              className="ghost icon-btn"
+              type="button"
+              aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
+              onClick={() => {
+                try {
+                  void toggleFullscreen()
+                } catch (e) {
+                  console.error(e)
+                }
+              }}
+            >
+              <img
+                className="icon-img"
+                src={isFullscreen ? exitFullScreenIcon : fullScreenIcon}
+                alt=""
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div ref={containerRef} className="visualizer-canvas" />
