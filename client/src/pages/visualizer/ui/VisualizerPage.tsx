@@ -2,12 +2,15 @@ import * as React from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   createWinterVisualizer,
+  getDefaultWinterAppearance,
+  type WinterAppearanceSettings,
   type WinterVisualizerHandle,
 } from '@/widgets/winter-visualizer'
 import fullScreenIcon from '@/assets/fullScreen.svg'
 import exitFullScreenIcon from '@/assets/exitFullScreen.svg'
 import playIcon from '@/assets/play.svg'
 import stopIcon from '@/assets/stop.svg'
+import settingIcon from '@/assets/setting.svg'
 
 type NavState =
   | { kind: 'preset'; index: number }
@@ -38,6 +41,12 @@ export function VisualizerPage() {
   const [paused, setPaused] = React.useState(true)
   const [topbarPostLoadHold, setTopbarPostLoadHold] = React.useState(false)
   const [isFullscreen, setIsFullscreen] = React.useState(false)
+  const [appearance, setAppearance] = React.useState<WinterAppearanceSettings>(
+    () => getDefaultWinterAppearance(),
+  )
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const settingsPopoverRef = React.useRef<HTMLDivElement | null>(null)
+  const settingsTriggerRef = React.useRef<HTMLButtonElement | null>(null)
 
   React.useEffect(() => {
     // React.StrictMode (dev) runs effects twice (mount -> cleanup -> mount).
@@ -132,6 +141,56 @@ export function VisualizerPage() {
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [loading, error])
+
+  React.useEffect(() => {
+    if (loading) return
+    try {
+      visualizerRef.current?.applyAppearance(appearance)
+    } catch (e) {
+      console.error(e)
+    }
+  }, [loading, appearance])
+
+  React.useEffect(() => {
+    if (!settingsOpen) return
+
+    const dismissOpenColorPicker = (e: PointerEvent) => {
+      const t = e.target
+      if (!(t instanceof Element)) return
+      const active = document.activeElement
+      if (!(active instanceof HTMLInputElement) || active.type !== 'color') return
+
+      if (t === active) return
+      if (typeof t.closest === 'function' && t.closest('input[type="color"]') === active)
+        return
+
+      active.blur()
+    }
+
+    const onDocPointerDown = (e: PointerEvent) => {
+      dismissOpenColorPicker(e)
+
+      const t = e.target as Node
+      if (
+        settingsPopoverRef.current?.contains(t) ||
+        settingsTriggerRef.current?.contains(t)
+      ) {
+        return
+      }
+      setSettingsOpen(false)
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSettingsOpen(false)
+    }
+
+    document.addEventListener('pointerdown', onDocPointerDown, true)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onDocPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [settingsOpen])
 
   React.useEffect(() => {
     if (loading) {
@@ -253,25 +312,342 @@ export function VisualizerPage() {
         ) : null}
         {!loading ? (
           <div className="topbar-right">
-            <button
-              className="ghost icon-btn"
-              type="button"
-              aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
-              onClick={() => {
-                try {
-                  void toggleFullscreen()
-                } catch (e) {
-                  console.error(e)
-                }
-              }}
-            >
-              <img
-                className="icon-img"
-                src={isFullscreen ? exitFullScreenIcon : fullScreenIcon}
-                alt=""
-                aria-hidden="true"
-              />
-            </button>
+            <div className="topbar-right-inner">
+              <button
+                ref={settingsTriggerRef}
+                className="ghost icon-btn"
+                type="button"
+                aria-label="비주얼 설정"
+                aria-expanded={settingsOpen}
+                aria-haspopup="dialog"
+                aria-controls="visualizer-appearance-popover"
+                onClick={() => setSettingsOpen((o) => !o)}
+              >
+                <img
+                  className="icon-img"
+                  src={settingIcon}
+                  alt=""
+                  aria-hidden="true"
+                />
+              </button>
+              {settingsOpen ? (
+                <div
+                  ref={settingsPopoverRef}
+                  id="visualizer-appearance-popover"
+                  className="visualizer-appearance-popover"
+                  role="dialog"
+                  aria-label="비주얼 설정"
+                >
+                  <div className="appearance-popover-section">
+                    <div className="appearance-popover-heading">블룸</div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">임계값</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="블룸 임계값"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={appearance.bloom.threshold}
+                        onChange={(e) => {
+                          const threshold = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            bloom: { ...p.bloom, threshold },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">강도</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="블룸 강도"
+                        min={0}
+                        max={3}
+                        step={0.02}
+                        value={appearance.bloom.strength}
+                        onChange={(e) => {
+                          const strength = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            bloom: { ...p.bloom, strength },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">반경</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="블룸 반경"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={appearance.bloom.radius}
+                        onChange={(e) => {
+                          const radius = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            bloom: { ...p.bloom, radius },
+                          }))
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="appearance-popover-section">
+                    <div className="appearance-popover-heading">
+                      스파클·트리 색
+                    </div>
+                    <div className="appearance-popover-row appearance-popover-row--color">
+                      <span className="appearance-popover-label">전체 틴트</span>
+                      <input
+                        className="appearance-popover-color"
+                        type="color"
+                        aria-label="스파클 전체 틴트"
+                        value={appearance.shader.tintHex}
+                        onChange={(e) => {
+                          const tintHex = e.target.value
+                          setAppearance((p) => ({
+                            ...p,
+                            shader: { ...p.shader, tintHex },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">트리 Hue 시작</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="트리 Hue 시작"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={appearance.shader.tree.hueStart}
+                        onChange={(e) => {
+                          const hueStart = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            shader: {
+                              ...p.shader,
+                              tree: { ...p.shader.tree, hueStart },
+                            },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">트리 Hue 끝</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="트리 Hue 끝"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={appearance.shader.tree.hueEnd}
+                        onChange={(e) => {
+                          const hueEnd = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            shader: {
+                              ...p.shader,
+                              tree: { ...p.shader.tree, hueEnd },
+                            },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">트리 채도</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="트리 채도"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={appearance.shader.tree.saturation}
+                        onChange={(e) => {
+                          const saturation = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            shader: {
+                              ...p.shader,
+                              tree: { ...p.shader.tree, saturation },
+                            },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">트리 명도</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="트리 명도"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={appearance.shader.tree.lightness}
+                        onChange={(e) => {
+                          const lightness = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            shader: {
+                              ...p.shader,
+                              tree: { ...p.shader.tree, lightness },
+                            },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row appearance-popover-row--color">
+                      <span className="appearance-popover-label">지면 색 1</span>
+                      <input
+                        className="appearance-popover-color"
+                        type="color"
+                        aria-label="지면 스파클 색 1"
+                        value={appearance.shader.planeColors[0]}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setAppearance((p) => {
+                            const planeColors = [...p.shader.planeColors] as [
+                              string,
+                              string,
+                              string,
+                            ]
+                            planeColors[0] = v
+                            return {
+                              ...p,
+                              shader: { ...p.shader, planeColors },
+                            }
+                          })
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row appearance-popover-row--color">
+                      <span className="appearance-popover-label">지면 색 2</span>
+                      <input
+                        className="appearance-popover-color"
+                        type="color"
+                        aria-label="지면 스파클 색 2"
+                        value={appearance.shader.planeColors[1]}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setAppearance((p) => {
+                            const planeColors = [...p.shader.planeColors] as [
+                              string,
+                              string,
+                              string,
+                            ]
+                            planeColors[1] = v
+                            return {
+                              ...p,
+                              shader: { ...p.shader, planeColors },
+                            }
+                          })
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row appearance-popover-row--color">
+                      <span className="appearance-popover-label">지면 색 3</span>
+                      <input
+                        className="appearance-popover-color"
+                        type="color"
+                        aria-label="지면 스파클 색 3"
+                        value={appearance.shader.planeColors[2]}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setAppearance((p) => {
+                            const planeColors = [...p.shader.planeColors] as [
+                              string,
+                              string,
+                              string,
+                            ]
+                            planeColors[2] = v
+                            return {
+                              ...p,
+                              shader: { ...p.shader, planeColors },
+                            }
+                          })
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="appearance-popover-section">
+                    <div className="appearance-popover-heading">눈</div>
+                    <div className="appearance-popover-row">
+                      <span className="appearance-popover-label">크기</span>
+                      <input
+                        className="appearance-popover-range"
+                        type="range"
+                        aria-label="눈 크기 배율"
+                        min={0.25}
+                        max={3}
+                        step={0.05}
+                        value={appearance.snow.sizeScale}
+                        onChange={(e) => {
+                          const sizeScale = Number(e.target.value)
+                          setAppearance((p) => ({
+                            ...p,
+                            snow: { ...p.snow, sizeScale },
+                          }))
+                        }}
+                      />
+                    </div>
+                    <div className="appearance-popover-row appearance-popover-row--color">
+                      <span className="appearance-popover-label">색</span>
+                      <input
+                        className="appearance-popover-color"
+                        type="color"
+                        aria-label="눈 색"
+                        value={appearance.snow.colorHex}
+                        onChange={(e) => {
+                          const colorHex = e.target.value
+                          setAppearance((p) => ({
+                            ...p,
+                            snow: { ...p.snow, colorHex },
+                          }))
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    className="ghost appearance-popover-reset"
+                    type="button"
+                    onClick={() =>
+                      setAppearance(getDefaultWinterAppearance())
+                    }
+                  >
+                    기본값 되돌리기
+                  </button>
+                </div>
+              ) : null}
+              <button
+                className="ghost icon-btn"
+                type="button"
+                aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
+                onClick={() => {
+                  try {
+                    void toggleFullscreen()
+                  } catch (e) {
+                    console.error(e)
+                  }
+                }}
+              >
+                <img
+                  className="icon-img"
+                  src={isFullscreen ? exitFullScreenIcon : fullScreenIcon}
+                  alt=""
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
