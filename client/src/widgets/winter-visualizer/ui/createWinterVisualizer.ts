@@ -1,0 +1,934 @@
+import * as THREE from 'three'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { createRadialSpriteTexture } from '@/shared/lib/threeSpriteTexture'
+import { getApiBaseUrl } from '@/shared/config/env'
+import { snowGlowEffectConfig } from '../model/config'
+
+const { PI, sin, cos } = Math
+const TAU = 2 * PI
+
+const map = (
+  value: number,
+  sMin: number,
+  sMax: number,
+  dMin: number,
+  dMax: number,
+) => dMin + ((value - sMin) / (sMax - sMin)) * (dMax - dMin)
+
+const range = (n: number, m = 0) =>
+  Array(n)
+    .fill(m)
+    .map((i, j) => i + j)
+
+const rand = (max: number, min = 0) => min + Math.random() * (max - min)
+const randInt = (max: number, min = 0) =>
+  Math.floor(min + Math.random() * (max - min))
+const randChoice = <T>(arr: T[]) => arr[randInt(arr.length)]
+const polar = (ang: number, r = 1) => [r * cos(ang), r * sin(ang)] as const
+
+const fftSize = 2048
+
+type WinterVisualizerOptions = {
+  mount?: HTMLElement
+  onLoading?: (text: string) => void
+  onReady?: () => void
+  onError?: (message: string) => void
+}
+
+export type WinterVisualizerHandle = {
+  playFromPreset: (i: number) => Promise<void>
+  playFromYoutubeUrl: (url: string) => Promise<void>
+  playFromFile: (file: File) => Promise<void>
+  getDurationSec: () => number
+  getCurrentTimeSec: () => number
+  seekSec: (t: number) => void
+  togglePlay: () => void
+  isPaused: () => boolean
+  dispose: () => void
+}
+
+type AudioClock = THREE.Audio & {
+  _progress: number
+  _startedAt: number
+}
+
+function bufferPlaybackSeconds(sound: THREE.Audio): number {
+  const a = sound as AudioClock
+  const bufDur = sound.buffer?.duration
+  if (!bufDur || bufDur <= 0) return 0
+
+  if (!sound.isPlaying) {
+    return Math.min(bufDur, Math.max(0, a.offset + a._progress))
+  }
+
+  const elapsed =
+    (sound.context.currentTime - a._startedAt) * sound.playbackRate
+  let pos = a.offset + a._progress + Math.max(elapsed, 0)
+  if (sound.loop) {
+    const span = sound.duration ?? bufDur
+    if (span > 0) pos = pos % span
+  }
+  return Math.min(bufDur, Math.max(0, pos))
+}
+
+function seekBufferSeconds(sound: THREE.Audio, t: number) {
+  const bufDur = sound.buffer?.duration
+  if (!bufDur || bufDur <= 0) return
+
+  const target = Math.min(bufDur, Math.max(0, t))
+  const wasPlaying = sound.isPlaying
+
+  try {
+    sound.stop()
+  } catch {
+    // ignore
+  }
+
+  sound.offset = target
+
+  if (wasPlaying) {
+    try {
+      sound.play()
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export function createWinterVisualizer(
+  options: WinterVisualizerOptions = {},
+): WinterVisualizerHandle {
+  let scene: THREE.Scene | undefined
+  let camera: THREE.PerspectiveCamera | undefined
+  let renderer: THREE.WebGLRenderer | undefined
+  let analyser: THREE.AudioAnalyser | undefined
+  let composer: EffectComposer | undefined
+  let step = 0
+  let rafId: number | null = null
+  let disposed = false
+  let youtubeAbort: AbortController | null = null
+
+  const POLL_MS = 550
+
+  let mediaEl: HTMLAudioElement | null = null
+  let mediaElObjectUrl: string | null = null
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (!camera) return
+    if (e.key !== 'p') return
+    const { x, y, z } = camera.position
+    console.log(`camera.position.set(${x},${y},${z})`)
+    const { x: a, y: b, z: c } = camera.rotation
+    console.log(`camera.rotation.set(${a},${b},${c})`)
+  }
+
+  const onResize = () => {
+    if (!camera || !renderer || !composer) return
+    const width = window.innerWidth
+    const height = window.innerHeight
+
+    camera.aspect = width / height
+    camera.updateProjectionMatrix()
+
+    renderer.setSize(width, height)
+    composer.setSize(width, height)
+  }
+
+  const listener = new THREE.AudioListener()
+  const audio = new THREE.Audio(listener)
+
+  const uniforms: Record<string, any> = {
+    time: { type: 'f', value: 0.0 },
+    step: { type: 'f', value: 0.0 },
+  }
+
+  const sparkleTexture = createRadialSpriteTexture({
+    colorStops: snowGlowEffectConfig.sparkle.colorStops,
+  })
+
+  const snowTextures = snowGlowEffectConfig.snow.sets.map((set) =>
+    createRadialSpriteTexture({ colorStops: set.textureStops }),
+  )
+
+  function init() {
+    if (disposed) return
+
+    scene = new THREE.Scene()
+    renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.setSize(window.innerWidth, window.innerHeight)
+    const host = options.mount ?? document.body
+    host.appendChild(renderer.domElement)
+
+    camera = new THREE.PerspectiveCamera(
+      60,
+      window.innerWidth / window.innerHeight,
+      1,
+      1000,
+    )
+    camera.position.set(
+      -0.09397456774197047,
+      -2.5597086635726947,
+      24.420789670889008,
+    )
+    camera.rotation.set(
+      0.10443543723052419,
+      -0.003827152981119352,
+      0.0004011488708739715,
+    )
+    camera.add(listener)
+
+    analyser ??= new THREE.AudioAnalyser(audio, fftSize)
+
+    const format = THREE.RedFormat as THREE.PixelFormat
+
+    uniforms.tAudioData = {
+      value: new THREE.DataTexture(analyser.data, fftSize / 2, 1, format),
+    }
+
+    addPlane(
+      scene,
+      uniforms,
+      snowGlowEffectConfig.scene.planePoints,
+      sparkleTexture,
+    )
+    addSnow(scene, uniforms, snowTextures)
+
+    range(snowGlowEffectConfig.scene.trees.rows).forEach((i) => {
+      addTree(
+        scene!,
+        uniforms,
+        snowGlowEffectConfig.scene.trees.pointsPerTree,
+        [20, 0, -20 * i],
+        sparkleTexture,
+      )
+      addTree(
+        scene!,
+        uniforms,
+        snowGlowEffectConfig.scene.trees.pointsPerTree,
+        [-20, 0, -20 * i],
+        sparkleTexture,
+      )
+    })
+
+    const renderScene = new RenderPass(scene, camera)
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      1.5,
+      0.4,
+      0.85,
+    )
+    bloomPass.threshold = snowGlowEffectConfig.bloom.threshold
+    bloomPass.strength = snowGlowEffectConfig.bloom.strength
+    bloomPass.radius = snowGlowEffectConfig.bloom.radius
+
+    composer = new EffectComposer(renderer)
+    composer.addPass(renderScene)
+    composer.addPass(bloomPass)
+
+    addListeners()
+    animate()
+    options.onReady?.()
+  }
+
+  function animate(time = 0) {
+    if (disposed) return
+    if (!analyser || !composer) return
+
+    analyser.getFrequencyData()
+    uniforms.tAudioData.value.needsUpdate = true
+    step = (step + 1) % 1000
+    uniforms.time.value = time
+    uniforms.step.value = step
+    composer.render()
+    rafId = requestAnimationFrame(animate)
+  }
+
+  function addListeners() {
+    if (!camera || !renderer || !composer) return
+
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', onResize, false)
+  }
+
+  async function playFromPreset(i: number) {
+    options.onLoading?.('Loading preset…')
+    const files = [
+      'https://files.freemusicarchive.org/storage-freemusicarchive-org/music/no_curator/Simon_Panrucker/Happy_Christmas_You_Guys/Simon_Panrucker_-_01_-_Snowflakes_Falling_Down.mp3',
+      'https://files.freemusicarchive.org/storage-freemusicarchive-org/music/no_curator/Dott/This_Christmas/Dott_-_01_-_This_Christmas.mp3',
+      'https://files.freemusicarchive.org/storage-freemusicarchive-org/music/ccCommunity/TRG_Banks/TRG_Banks_Christmas_Album/TRG_Banks_-_12_-_No_room_at_the_inn.mp3',
+      'https://files.freemusicarchive.org/storage-freemusicarchive-org/music/ccCommunity/Mark_Smeby/En_attendant_Nol/Mark_Smeby_-_07_-_Jingle_Bell_Swing.mp3',
+    ]
+    const file = files[i]
+
+    await loadAndPlayUrl(file)
+  }
+
+  async function playFromFile(file: File) {
+    // NOTE: Avoid decodeAudioData for user files when possible.
+    // Some mp3s fail to decode or are very large; streaming via <audio>
+    // is more robust and enables seeking.
+    options.onLoading?.('오디오 준비 중…')
+    const objectUrl = URL.createObjectURL(file)
+    await playFromMediaElementUrl(objectUrl, { isObjectUrl: true })
+  }
+
+  async function playFromYoutubeUrl(url: string) {
+    youtubeAbort?.abort()
+    youtubeAbort = new AbortController()
+    const signal = youtubeAbort.signal
+
+    options.onLoading?.('YouTube 변환 중… 0%')
+
+    try {
+      const apiBase = getApiBaseUrl()
+      if (!apiBase) {
+        throw new Error('API base URL is not configured')
+      }
+
+      const createRes = await fetch(`${apiBase}/youtube/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+        signal,
+      })
+
+      if (!createRes.ok) {
+        throw new Error('Failed to start YouTube conversion job')
+      }
+
+      const { jobId } = (await createRes.json()) as { jobId?: string }
+      if (!jobId) {
+        throw new Error('Missing jobId from server')
+      }
+
+      type JobStatus = {
+        status: string
+        percent?: number
+        error?: string
+      }
+
+      while (true) {
+        if (signal.aborted) return
+
+        const statusRes = await fetch(`${apiBase}/youtube/jobs/${jobId}`, {
+          signal,
+        })
+        if (!statusRes.ok) {
+          throw new Error('Failed to read conversion progress')
+        }
+
+        const job = (await statusRes.json()) as JobStatus
+
+        if (job.status === 'error') {
+          throw new Error(job.error || 'YouTube conversion failed')
+        }
+
+        if (job.status === 'done') {
+          options.onLoading?.(
+            `YouTube 변환 중… ${Math.min(100, Math.max(0, Math.round(job.percent ?? 100)))}%`,
+          )
+          break
+        }
+
+        const pct = Math.min(99, Math.max(0, Math.round(job.percent ?? 0)))
+        options.onLoading?.(`YouTube 변환 중… ${pct}%`)
+
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => {
+            window.clearTimeout(t)
+            reject(new DOMException('Aborted', 'AbortError'))
+          }
+          const t = window.setTimeout(() => {
+            signal.removeEventListener('abort', onAbort)
+            resolve()
+          }, POLL_MS)
+          signal.addEventListener('abort', onAbort, { once: true })
+        })
+      }
+
+      // NOTE: Do not download + decode the whole mp3 with decodeAudioData here.
+      // Long mp3s can fail to decode or OOM. Instead, stream via <audio> element
+      // and connect it to WebAudio for analysis.
+      await playFromMediaElementUrl(`${apiBase}/youtube/jobs/${jobId}/audio`)
+    } catch (err) {
+      if (signal.aborted) return
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      console.error(err)
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'string'
+            ? err
+            : 'Unknown error'
+      options.onError?.(`Failed to convert or play audio. ${msg}`)
+    }
+  }
+
+  async function playFromMediaElementUrl(
+    url: string,
+    opts: { isObjectUrl?: boolean } = {},
+  ) {
+    options.onLoading?.('오디오 스트리밍 준비 중…')
+
+    if (mediaEl) {
+      try {
+        mediaEl.pause()
+      } catch {
+        // ignore
+      }
+      mediaEl.src = ''
+      mediaEl.load()
+      mediaEl = null
+    }
+    if (mediaElObjectUrl && mediaElObjectUrl !== url) {
+      try {
+        URL.revokeObjectURL(mediaElObjectUrl)
+      } catch {
+        // ignore
+      }
+      mediaElObjectUrl = null
+    }
+
+    const el = document.createElement('audio')
+    el.crossOrigin = 'anonymous'
+    el.preload = 'auto'
+    el.src = url
+    mediaEl = el
+    mediaElObjectUrl = opts.isObjectUrl ? url : null
+
+    try {
+      void listener.context.resume()
+    } catch {
+      // ignore
+    }
+
+    audio.setMediaElementSource(el)
+    analyser = new THREE.AudioAnalyser(audio, fftSize)
+
+    options.onLoading?.('오디오 스트리밍 중…')
+    await el.play()
+
+    init()
+  }
+
+  function getDurationSec(): number {
+    if (mediaEl) {
+      const d = mediaEl.duration
+      return Number.isFinite(d) && d > 0 ? d : 0
+    }
+    const d = audio.buffer?.duration
+    return Number.isFinite(d) && d && d > 0 ? d : 0
+  }
+
+  function getCurrentTimeSec(): number {
+    try {
+      if (mediaEl) {
+        const t = mediaEl.currentTime
+        return Number.isFinite(t) && t >= 0 ? t : 0
+      }
+      if (audio.sourceType === 'buffer' && audio.buffer) {
+        return bufferPlaybackSeconds(audio)
+      }
+    } catch {
+      // ignore
+    }
+    return 0
+  }
+
+  function seekSec(t: number) {
+    try {
+      if (mediaEl) {
+        mediaEl.currentTime = Math.max(0, t)
+        return
+      }
+      if (audio.sourceType === 'buffer' && audio.buffer) {
+        seekBufferSeconds(audio, t)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function togglePlay() {
+    try {
+      if (mediaEl) {
+        if (mediaEl.paused) {
+          void mediaEl.play()
+        } else {
+          mediaEl.pause()
+        }
+        return
+      }
+      if (audio.sourceType === 'buffer' && audio.buffer) {
+        if (audio.isPlaying) {
+          audio.pause()
+        } else {
+          audio.play()
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function isPaused(): boolean {
+    try {
+      if (mediaEl) return mediaEl.paused
+      if (audio.sourceType === 'buffer' && audio.buffer) return !audio.isPlaying
+    } catch {
+      // ignore
+    }
+    return true
+  }
+
+  function decodeAndPlayArrayBuffer(arrayBuffer: ArrayBuffer) {
+    return new Promise<void>((resolve, reject) => {
+      if (disposed) {
+        reject(new Error('disposed'))
+        return
+      }
+      listener.context.decodeAudioData(
+        arrayBuffer,
+        (audioBuffer: AudioBuffer) => {
+          if (disposed) return
+          try {
+            void listener.context.resume()
+          } catch {
+            // ignore
+          }
+          audio.setBuffer(audioBuffer)
+          audio.play()
+          analyser = new THREE.AudioAnalyser(audio, fftSize)
+          init()
+          resolve()
+        },
+        () => reject(new Error('decodeAudioData failed')),
+      )
+    })
+  }
+
+  function loadAndPlayUrl(url: string) {
+    return new Promise<void>((resolve, reject) => {
+      if (disposed) {
+        reject(new Error('disposed'))
+        return
+      }
+      const loader = new THREE.AudioLoader()
+      loader.load(
+        url,
+        (buffer: AudioBuffer) => {
+          if (disposed) return
+          try {
+            void listener.context.resume()
+          } catch {
+            // ignore
+          }
+          audio.setBuffer(buffer)
+          audio.play()
+          analyser = new THREE.AudioAnalyser(audio, fftSize)
+          init()
+          resolve()
+        },
+        undefined,
+        () => reject(new Error('AudioLoader failed')),
+      )
+    })
+  }
+
+  function dispose() {
+    disposed = true
+
+    youtubeAbort?.abort()
+    youtubeAbort = null
+
+    document.removeEventListener('keydown', onKeyDown)
+    window.removeEventListener('resize', onResize, false)
+
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+
+    try {
+      audio.stop()
+    } catch {
+      // ignore
+    }
+
+    if (mediaEl) {
+      try {
+        mediaEl.pause()
+      } catch {
+        // ignore
+      }
+      mediaEl.src = ''
+      mediaEl.load()
+      mediaEl = null
+    }
+    if (mediaElObjectUrl) {
+      try {
+        URL.revokeObjectURL(mediaElObjectUrl)
+      } catch {
+        // ignore
+      }
+      mediaElObjectUrl = null
+    }
+
+    try {
+      audio.disconnect()
+    } catch {
+      // ignore
+    }
+
+    try {
+      listener.remove()
+    } catch {
+      // ignore
+    }
+
+    // NOTE: Do not close() the AudioContext here. three.js audio is commonly
+    // backed by a shared/singleton AudioContext; closing it can break audio
+    // for the rest of the app until refresh. (See three.js AudioListener docs.)
+    try {
+      void listener.context.suspend()
+    } catch {
+      // ignore
+    }
+
+    if (composer) {
+      composer.dispose()
+      composer = undefined
+    }
+
+    if (scene) {
+      scene.traverse((obj) => {
+        const anyObj = obj as any
+        if (anyObj.geometry) anyObj.geometry.dispose?.()
+        if (anyObj.material) {
+          const mats = Array.isArray(anyObj.material)
+            ? anyObj.material
+            : [anyObj.material]
+          for (const m of mats) {
+            m.dispose?.()
+          }
+        }
+      })
+      scene.clear()
+      scene = undefined
+    }
+
+    if (renderer) {
+      renderer.domElement.remove()
+      renderer.dispose()
+      renderer = undefined
+    }
+
+    camera = undefined
+    analyser = undefined
+  }
+
+  return {
+    playFromPreset,
+    playFromYoutubeUrl,
+    playFromFile,
+    getDurationSec,
+    getCurrentTimeSec,
+    seekSec,
+    togglePlay,
+    isPaused,
+    dispose,
+  }
+}
+
+function addTree(
+  scene: THREE.Scene,
+  uniforms: Record<string, any>,
+  totalPoints: number,
+  treePosition: [number, number, number],
+  sparkleTexture: THREE.Texture,
+) {
+  const vertexShader = `
+  attribute float mIndex;
+  varying vec3 vColor;
+  varying float opacity;
+  uniform sampler2D tAudioData;
+
+  float norm(float value, float min, float max ){
+      return (value - min) / (max - min);
+  }
+  float lerp(float norm, float min, float max){
+  return (max - min) * norm + min;
+  }
+
+  float map(float value, float sourceMin, float sourceMax, float destMin, float destMax){
+  return lerp(norm(value, sourceMin, sourceMax), destMin, destMax);
+  }
+
+  void main() {
+      vColor = color;
+      vec3 p = position;
+      vec4 mvPosition = modelViewMatrix * vec4( p, 1.0 );
+      float amplitude = texture2D( tAudioData, vec2( mIndex, 0.1 ) ).r;
+      float amplitudeClamped = clamp(amplitude-0.4,0.0, 0.6 );
+      float sizeMapped = map(amplitudeClamped, 0.0, 0.6, 1.0, 20.0);
+      opacity = map(mvPosition.z , -200.0, 15.0, 0.0, 1.0);
+      gl_PointSize = sizeMapped * ( 100.0 / -mvPosition.z );
+      gl_Position = projectionMatrix * mvPosition;
+  }`
+
+  const fragmentShader = `
+  varying vec3 vColor;
+  varying float opacity;
+  uniform sampler2D pointTexture;
+  void main() {
+      gl_FragColor = vec4( vColor, opacity );
+      gl_FragColor = gl_FragColor * texture2D( pointTexture, gl_PointCoord ); 
+  }`
+
+  const shaderMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      ...uniforms,
+      pointTexture: {
+        value: sparkleTexture,
+      },
+    },
+    vertexShader,
+    fragmentShader,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    transparent: true,
+    vertexColors: true,
+  })
+
+  const geometry = new THREE.BufferGeometry()
+  const positions: number[] = []
+  const colors: number[] = []
+  const sizes: number[] = []
+  const phases: number[] = []
+  const mIndexs: number[] = []
+
+  const color = new THREE.Color()
+
+  for (let i = 0; i < totalPoints; i++) {
+    const t = Math.random()
+    const y = map(t, 0, 1, -8, 10)
+    const ang = map(t, 0, 1, 0, 6 * TAU) + (TAU / 2) * (i % 2)
+    const [z, x] = polar(ang, map(t, 0, 1, 5, 0))
+
+    const modifier = map(t, 0, 1, 1, 0)
+    positions.push(x + rand(-0.3 * modifier, 0.3 * modifier))
+    positions.push(y + rand(-0.3 * modifier, 0.3 * modifier))
+    positions.push(z + rand(-0.3 * modifier, 0.3 * modifier))
+
+    color.setHSL(map(i, 0, totalPoints, 1.0, 0.0), 1.0, 0.5)
+    colors.push(color.r, color.g, color.b)
+    phases.push(rand(1000))
+    sizes.push(1)
+
+    const mIndex = map(i, 0, totalPoints, 1.0, 0.0)
+    mIndexs.push(mIndex)
+  }
+
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3).setUsage(
+      THREE.DynamicDrawUsage,
+    ),
+  )
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+  geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
+  geometry.setAttribute('phase', new THREE.Float32BufferAttribute(phases, 1))
+  geometry.setAttribute('mIndex', new THREE.Float32BufferAttribute(mIndexs, 1))
+
+  const tree = new THREE.Points(geometry, shaderMaterial)
+  const [px, py, pz] = treePosition
+  tree.position.set(px, py, pz)
+
+  scene.add(tree)
+}
+
+function addSnow(
+  scene: THREE.Scene,
+  uniforms: Record<string, any>,
+  textures: THREE.Texture[],
+) {
+  const vertexShader = `
+  attribute float size;
+  attribute float phase;
+  attribute float phaseSecondary;
+
+  varying vec3 vColor;
+  varying float opacity;
+
+  uniform float time;
+  uniform float step;
+
+  float norm(float value, float min, float max ){
+      return (value - min) / (max - min);
+  }
+  float lerp(float norm, float min, float max){
+      return (max - min) * norm + min;
+  }
+  float map(float value, float sourceMin, float sourceMax, float destMin, float destMax){
+      return lerp(norm(value, sourceMin, sourceMax), destMin, destMax);
+  }
+  void main() {
+      float t = time* 0.0006;
+
+      vColor = color;
+      vec3 p = position;
+
+      p.y = map(mod(phase+step, 1000.0), 0.0, 1000.0, 25.0, -8.0);
+      p.x += sin(t+phase);
+      p.z += sin(t+phaseSecondary);
+
+      opacity = map(p.z, -150.0, 15.0, 0.0, 1.0);
+      vec4 mvPosition = modelViewMatrix * vec4( p, 1.0 );
+      gl_PointSize = size * ( 100.0 / -mvPosition.z );
+      gl_Position = projectionMatrix * mvPosition;
+  }`
+
+  const fragmentShader = `
+  uniform sampler2D pointTexture;
+  varying vec3 vColor;
+  varying float opacity;
+  void main() {
+      gl_FragColor = vec4( vColor, opacity );
+      gl_FragColor = gl_FragColor * texture2D( pointTexture, gl_PointCoord ); 
+  }`
+
+  function createSnowSet(texture: THREE.Texture, setIndex: number) {
+    const set = snowGlowEffectConfig.snow.sets[setIndex]
+    const totalPoints = set?.points ?? 300
+    const shaderMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        ...uniforms,
+        pointTexture: {
+          value: texture,
+        },
+      },
+      vertexShader,
+      fragmentShader,
+      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      transparent: true,
+      vertexColors: true,
+    })
+
+    const geometry = new THREE.BufferGeometry()
+    const positions: number[] = []
+    const colors: number[] = []
+    const sizes: number[] = []
+    const phases: number[] = []
+    const phaseSecondaries: number[] = []
+
+    const color = new THREE.Color()
+
+    for (let i = 0; i < totalPoints; i++) {
+      const [x, y, z] = [rand(25, -25), 0, rand(15, -150)]
+      positions.push(x, y, z)
+
+      color.set(randChoice(set?.colors ?? ['#ffffff']))
+      colors.push(color.r, color.g, color.b)
+      phases.push(rand(1000))
+      phaseSecondaries.push(rand(1000))
+      const min = set?.size.min ?? 2
+      const max = set?.size.max ?? 4
+      sizes.push(rand(max, min))
+    }
+
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(positions, 3),
+    )
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+    geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
+    geometry.setAttribute('phase', new THREE.Float32BufferAttribute(phases, 1))
+    geometry.setAttribute(
+      'phaseSecondary',
+      new THREE.Float32BufferAttribute(phaseSecondaries, 1),
+    )
+
+    const mesh = new THREE.Points(geometry, shaderMaterial)
+    scene.add(mesh)
+  }
+
+  textures.forEach((t, idx) => createSnowSet(t, idx))
+}
+
+function addPlane(
+  scene: THREE.Scene,
+  uniforms: Record<string, any>,
+  totalPoints: number,
+  sparkleTexture: THREE.Texture,
+) {
+  const vertexShader = `
+  attribute float size;
+  attribute vec3 customColor;
+  varying vec3 vColor;
+
+  void main() {
+      vColor = customColor;
+      vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+      gl_PointSize = size * ( 300.0 / -mvPosition.z );
+      gl_Position = projectionMatrix * mvPosition;
+  }`
+
+  const fragmentShader = `
+  uniform sampler2D pointTexture;
+  varying vec3 vColor;
+
+  void main() {
+      gl_FragColor = vec4( vColor, 1.0 );
+      gl_FragColor = gl_FragColor * texture2D( pointTexture, gl_PointCoord );
+  }`
+
+  const shaderMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      ...uniforms,
+      pointTexture: {
+        value: sparkleTexture,
+      },
+    },
+    vertexShader,
+    fragmentShader,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    transparent: true,
+    vertexColors: true,
+  })
+
+  const geometry = new THREE.BufferGeometry()
+  const positions: number[] = []
+  const colors: number[] = []
+  const sizes: number[] = []
+
+  const color = new THREE.Color()
+
+  for (let i = 0; i < totalPoints; i++) {
+    const [x, y, z] = [rand(-25, 25), 0, rand(-150, 15)]
+    positions.push(x, y, z)
+    color.set(randChoice(['#93abd3', '#f2f4c0', '#9ddfd3']))
+    colors.push(color.r, color.g, color.b)
+    sizes.push(1)
+  }
+
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3).setUsage(
+      THREE.DynamicDrawUsage,
+    ),
+  )
+  geometry.setAttribute(
+    'customColor',
+    new THREE.Float32BufferAttribute(colors, 3),
+  )
+  geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1))
+
+  const plane = new THREE.Points(geometry, shaderMaterial)
+  plane.position.y = -8
+  scene.add(plane)
+}

@@ -1,0 +1,35 @@
+---
+description: Photo Guard FSD 레이어 트리와 import 의존성 규칙. 모든 코드 작업 시 구조 준수.
+alwaysApply: true
+---
+
+# FSD — 코어 (구조·의존성)
+
+## 1) 최상위 구조
+
+```
+src/
+  app/
+  processes/
+  pages/
+  widgets/
+  features/
+  entities/
+  shared/
+```
+
+## 2) 의존성 규칙
+
+| 레이어    | 의존 가능한 레이어                         |
+| --------- | ------------------------------------------ |
+| app       | 모든 레이어                                |
+| processes | pages, widgets, features, entities, shared |
+| pages     | widgets, features, entities, shared        |
+| widgets   | features, entities, shared                 |
+| features  | entities, shared                           |
+| entities  | shared                                     |
+| shared    | 없음                                       |
+
+슬라이스별 `ui` / `model` / `api` 폴더 템플릿은 프로젝트 스킬 `.cursor/skills/fsd-slices/SKILL.md`를 읽고 따른다.
+
+배경·현재 `src/` 트리 요약·크로스 슬라이스 메모는 **`docs/architecture/README.md`** 를 본다.

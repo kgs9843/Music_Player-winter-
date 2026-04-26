@@ -1,0 +1,10 @@
+---
+description: UI/design — canonical copy lives in docs/design/design-system.md
+alwaysApply: false
+---
+
+# Design
+
+**SoT:** [`docs/design/design-system.md`](../../docs/design/design-system.md)
+
+색·타이포·서피스·컴포넌트 규칙은 위 문서를 따릅니다. 구현 전 해당 섹션을 확인합니다.
