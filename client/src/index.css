@@ -395,11 +395,17 @@ ul {
 .visualizer-topbar .ghost.topbar-play {
   flex: 0 0 auto;
   box-sizing: border-box;
-  width: 77px;
-  min-width: 77px;
-  padding: 8px 10px;
-  letter-spacing: 1.1px;
+  width: 44px;
+  min-width: 44px;
+  height: 41px;
+  padding: 10px 0;
+  letter-spacing: 0;
   text-align: center;
+}
+
+.visualizer-topbar .ghost.topbar-play .icon-img {
+  width: 18px;
+  height: 18px;
 }
 
 .loading-overlay {

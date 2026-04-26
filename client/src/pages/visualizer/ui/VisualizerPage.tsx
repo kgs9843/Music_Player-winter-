@@ -6,6 +6,8 @@ import {
 } from '@/widgets/winter-visualizer'
 import fullScreenIcon from '@/assets/fullScreen.svg'
 import exitFullScreenIcon from '@/assets/exitFullScreen.svg'
+import playIcon from '@/assets/play.svg'
+import stopIcon from '@/assets/stop.svg'
 
 type NavState =
   | { kind: 'preset'; index: number }
@@ -205,7 +207,12 @@ export function VisualizerPage() {
                   }
                 }}
               >
-                {paused ? 'Play' : 'Pause'}
+                <img
+                  className="icon-img"
+                  src={paused ? playIcon : stopIcon}
+                  alt=""
+                  aria-hidden="true"
+                />
               </button>
               <span className="topbar-time" aria-hidden="true">
                 {formatTimecode(currentSec)}
