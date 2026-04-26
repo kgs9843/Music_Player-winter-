@@ -45,6 +45,7 @@ npm start
   - yt-dlp에 `--cookies-from-browser`로 전달할 값
   - 예: `chrome`, `chrome:Default`, `edge`, 등(환경/브라우저에 따라 다름)
   - 일부 영상에서 403/서명 문제를 완화하는 데 도움이 될 수 있습니다.
+  - 템플릿: `.env.example`
 
 ## CORS
 

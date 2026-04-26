@@ -1,4 +1,5 @@
 // server/server.js
+import dotenv from "dotenv";
 import express from "express";
 import ytdlp from "yt-dlp-exec";
 import cors from "cors";
@@ -7,6 +8,8 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { createRequire } from "module";
 import { spawn } from "child_process";
+
+dotenv.config();
 
 const app = express();
 app.use(cors({ origin: "http://localhost:5173" })); // Vite 기본 포트 허용
