@@ -1,3 +1,7 @@
 # node_modules 제외
 client/node_modules/
 server/node_modules/
+
+# 임시 파일 (예: 변환 중/완료 mp3 캐시)
+server/temp/
+temp/

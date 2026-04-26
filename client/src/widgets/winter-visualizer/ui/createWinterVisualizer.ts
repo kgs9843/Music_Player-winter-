@@ -150,6 +150,8 @@ export function createWinterVisualizer(
 
   let mediaEl: HTMLAudioElement | null = null
   let mediaElObjectUrl: string | null = null
+  /** `ended` 이벤트 — 스트리밍에서 currentTime이 duration보다 짧게 남어도 시크바를 끝에 맞출 때 사용 */
+  let mediaReportedFinished = false
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (!camera) return
@@ -484,6 +486,7 @@ export function createWinterVisualizer(
       mediaEl.src = ''
       mediaEl.load()
       mediaEl = null
+      mediaReportedFinished = false
     }
     if (mediaElObjectUrl && mediaElObjectUrl !== url) {
       try {
@@ -500,6 +503,16 @@ export function createWinterVisualizer(
     el.src = url
     mediaEl = el
     mediaElObjectUrl = opts.isObjectUrl ? url : null
+    mediaReportedFinished = false
+
+    const clearFinished = () => {
+      mediaReportedFinished = false
+    }
+    el.addEventListener('play', clearFinished)
+    el.addEventListener('seeking', clearFinished)
+    el.addEventListener('ended', () => {
+      mediaReportedFinished = true
+    })
 
     try {
       void listener.context.resume()
@@ -536,7 +549,26 @@ export function createWinterVisualizer(
   function getCurrentTimeSec(): number {
     try {
       if (mediaEl) {
+        const d = mediaEl.duration
         const t = mediaEl.currentTime
+        if (Number.isFinite(d) && d > 0) {
+          // 종료 후 currentTime이 duration보다 몇 초 짧게 남는 경우(메타데이터 길이 vs 실제 스트림) 대비
+          if (mediaReportedFinished || mediaEl.ended) {
+            return d
+          }
+          const gap = d - t
+          const nearEndWhilePaused =
+            mediaEl.paused &&
+            !mediaEl.seeking &&
+            Number.isFinite(t) &&
+            t >= 0 &&
+            t >= d * 0.985 &&
+            gap > 0.04 &&
+            gap <= 8
+          if (nearEndWhilePaused) {
+            return d
+          }
+        }
         return Number.isFinite(t) && t >= 0 ? t : 0
       }
       if (audio.sourceType === 'buffer' && audio.buffer) {
@@ -551,6 +583,7 @@ export function createWinterVisualizer(
   function seekSec(t: number) {
     try {
       if (mediaEl) {
+        mediaReportedFinished = false
         mediaEl.currentTime = Math.max(0, t)
         return
       }
@@ -778,6 +811,7 @@ export function createWinterVisualizer(
       mediaEl.load()
       mediaEl = null
     }
+    mediaReportedFinished = false
     if (mediaElObjectUrl) {
       try {
         URL.revokeObjectURL(mediaElObjectUrl)

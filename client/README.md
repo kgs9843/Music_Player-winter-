@@ -69,8 +69,20 @@ npm run verify
 - YouTube/업로드 mp3는 `<audio>` 스트리밍으로 재생하며 상단바 **Play/Pause + 시크바**로 탐색할 수 있습니다.
 - 상단바 오른쪽의 버튼으로 **전체화면 토글**이 가능합니다.
 
-## 이펙트 설정(눈/반짝/Bloom)
+## 비주얼 외관(설정 패널)
 
-비주얼 파라미터는 아래 파일에서 한 번에 조절합니다.
+비주얼라이저 화면 상단바 **톱니(설정) 버튼**으로 패널을 열 수 있습니다. 값은 `createWinterVisualizer`의 `applyAppearance`로 즉시 반영됩니다.
 
-- `src/widgets/winter-visualizer/model/config.ts` (`snowGlowEffectConfig`)
+| 구역 | 조절 항목 |
+| --- | --- |
+| **블룸** | 임계값, 강도, 반경 |
+| **스파클·트리 색** | 전역 틴트(트리·지면 스파클에 곱함), 트리 Hue 시작/끝·채도·명도, 지면 스파클 색 3개(입자마다 무작위) |
+| **눈** | 크기 배율, 색(단일) |
+
+타입·기본값: `src/widgets/winter-visualizer/model/appearance.ts`, `getDefaultWinterAppearance()` · `winterAppearanceUiDefaults` in `model/config.ts`.
+
+## 이펙트/씬 고정값(코드)
+
+런타임 UI에 없는 **입자 수·레이어·트리 밀도** 등은 설정 파일에서 조절합니다.
+
+- `src/widgets/winter-visualizer/model/config.ts` — `snowGlowEffectConfig`(눈 세트별 포인트 수·크기 범위, 트리/지면 포인트 수 등), `winterPlaneSparklePalette`(지면 색 기본 3색)
