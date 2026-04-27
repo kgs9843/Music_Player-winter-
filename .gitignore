@@ -5,3 +5,7 @@ server/node_modules/
 # 임시 파일 (예: 변환 중/완료 mp3 캐시)
 server/temp/
 temp/
+
+# 서버 변환 로그 (job별 jsonl/stderr)
+server/logs/
+logs/
